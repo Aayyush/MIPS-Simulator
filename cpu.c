@@ -6,6 +6,7 @@
  */
 
 #include "cpu.h"
+#include "memory.h"
 
 struct cpu_context cpu_ctx;
 
