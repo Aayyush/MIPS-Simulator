@@ -1,8 +1,8 @@
 /**
  * Gedare Bloom
- * main.c
+ * single-cycle.c
  *
- * Drives the simulation
+ * Drives the simulation of a single-cycle processor
  */
 
 #include "cpu.h"
@@ -15,8 +15,6 @@
 
 #define DEBUG 0
 //#define DEBUG 1
-
-uint32_t buffer[2048];
 
 int main( int argc, char *argv[] )
 {
