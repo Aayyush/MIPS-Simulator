@@ -6,6 +6,7 @@
  */
 
 #include "cpu.h"
+#include "memory.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -21,14 +22,20 @@ int main( int argc, char *argv[] )
 	struct MEM_WB_buffer mem_wb;
 	int i;
 
-	for ( i = 0; i < 2048; i++ ) {
-		buffer[i] = 0;
+	for ( i = 0; i < 1024; i++ ) {
+		instruction_memory[i] = 0;
+		data_memory[i] = 0;
+		stack_memory[i] = 0;
 	}
 
 	f = fopen(argv[1], "r");
-	for ( i = 0; i < 2048; i++ ) {
-		fread(&buffer[i], sizeof(uint32_t), 1, f);
-		printf("%d\n", buffer[i]);
+	for ( i = 0; i < 1024; i++ ) {
+		fread(&data_memory[i], sizeof(uint32_t), 1, f);
+		printf("%u\n", data_memory[i]);
+	}
+	for ( i = 0; i < 1024; i++ ) {
+		fread(&instruction_memory[i], sizeof(uint32_t), 1, f);
+		printf("%u\n", instruction_memory[i]);
 	}
 	fclose(f);
 
