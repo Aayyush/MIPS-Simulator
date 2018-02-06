@@ -13,8 +13,7 @@
 #include <stdio.h>
 #include <assert.h>
 
-#define DEBUG 0
-//#define DEBUG 1
+#define DEBUG
 
 int main( int argc, char *argv[] )
 {
@@ -42,20 +41,20 @@ int main( int argc, char *argv[] )
 	assert (f);
 	for ( i = 0; i < 1024; i++ ) {
 		fread(&data_memory[i], sizeof(uint32_t), 1, f);
-#if DEBUG
+#if defined(DEBUG)
 		printf("%u\n", data_memory[i]);
 #endif
 	}
 	for ( i = 0; i < 1024; i++ ) {
 		fread(&instruction_memory[i], sizeof(uint32_t), 1, f);
-#if DEBUG
+#if defined(DEBUG)
 		printf("%u\n", instruction_memory[i]);
 #endif
 	}
 	fclose(f);
 
 	while(1) {
-#if DEBUG
+#if defined(DEBUG)
 		printf("FETCH from PC=%x\n", cpu_ctx.PC);
 #endif
 		fetch( &if_id );
