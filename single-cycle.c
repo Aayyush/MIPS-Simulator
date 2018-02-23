@@ -1,5 +1,9 @@
 /**
  * Gedare Bloom
+ * Bijesh Subedi
+ * Kishor Subedi
+ * Aayush Gupta
+ * Suraj Upreti
  * single-cycle.c
  *
  * Drives the simulation of a single-cycle processor
@@ -15,7 +19,7 @@
 
 #define DEBUG
 
-int main( int argc, char *argv[] )
+int main()
 {
 	FILE *f;
 	struct IF_ID_buffer if_id;
@@ -30,14 +34,13 @@ int main( int argc, char *argv[] )
 		cpu_ctx.GPR[i] = 0;
 	}
 
-	for ( i = 0; i < 1024; i++ ) {
-		instruction_memory[i] = 0;
+	for ( i = 0; i < 2048; i++ ) {
+		instruction_memory[i/2] = 0;
 		data_memory[i] = 0;
-		stack_memory[i] = 0;
 	}
 
 	/* Read memory from the input file */
-	f = fopen(argv[1], "r");
+	f = fopen("program.sim", "r");
 	assert (f);
 	for ( i = 0; i < 1024; i++ ) {
 		fread(&data_memory[i], sizeof(uint32_t), 1, f);
@@ -53,16 +56,24 @@ int main( int argc, char *argv[] )
 	}
 	fclose(f);
 
+
+	int a = 0;
+    
+    /* Initialize PC and stack register */
+    cpu_ctx.PC = 0x00400000;
+    cpu_ctx.GPR[29] = 0x10000800;
 	while(1) {
+		a++;
+		// Set the PC to the 1st address in memory.
 #if defined(DEBUG)
-		printf("FETCH from PC=%x\n", cpu_ctx.PC);
+		printf("FETCH from PC=%x \n", cpu_ctx.PC);
 #endif
 		fetch( &if_id );
 		decode( &if_id, &id_ex );
 		execute( &id_ex, &ex_mem );
 		memory( &ex_mem, &mem_wb );
 		writeback( &mem_wb );
-		if ( cpu_ctx.PC == 0 ) break;
+		if ( (cpu_ctx.PC == 0) | (a >= 100)) break;
 	}
 
 	return 0;

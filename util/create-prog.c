@@ -10,7 +10,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
+#include <string.h>
 
+#define _GNU_SOURCE
 #define DEBUG
 
 static void read_and_write(FILE *in, FILE *out, size_t count)
@@ -69,7 +71,6 @@ int main( int argc, char *argv[] )
 	assert(data);
 	assert(output);
 
-  /* data segment goes first in the program, followed by text. */
 	read_and_write(data, output, 1024);
 	read_and_write(text, output, 1024);
 
