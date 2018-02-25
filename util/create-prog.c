@@ -69,8 +69,9 @@ int main( int argc, char *argv[] )
 	assert(data);
 	assert(output);
 
-	read_and_write(text, output, 1024);
+  /* data segment goes first in the program, followed by text. */
 	read_and_write(data, output, 1024);
+	read_and_write(text, output, 1024);
 
 	fclose(text);
 	fclose(data);
