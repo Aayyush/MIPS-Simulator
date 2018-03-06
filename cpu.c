@@ -14,116 +14,135 @@
 #include "syscall.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdbool.h>
+
+#define ENABLE_FORWARDING
+
+bool pc_write = true;
+bool if_id_write = true;
+bool squash = false;
+
+
+int stalls = 0;
+int squashs = 0;
 
 struct cpu_context cpu_ctx;
+struct IF_ID_buffer if_id;
+struct ID_EX_buffer id_ex;
+struct EX_MEM_buffer ex_mem;
+struct MEM_WB_buffer mem_wb;
 
-int fetch( struct IF_ID_buffer *out )
+int fetch()
 {
 	// Finding the new PC and retrieving the instruction
-	out->instruction = instruction_memory[(cpu_ctx.PC - 0x400000)/4];
-	out->next_pc = cpu_ctx.PC + 0x4;
-    
+	add_instruction(instruction_memory[(cpu_ctx.PC - 0x400000)/4]);
+	if_id.next_pc = cpu_ctx.PC + 0x4;
+	update_pc(if_id.next_pc);
 	return 0;
 }
 
-int decode( struct IF_ID_buffer *in, struct ID_EX_buffer *out )
+int decode()
 {
+    /*
+     1. Pass the instruction from the IF/ID buffer to the ID/EX buffer.
+     2. Decode Instruction and write to the ID/EX buffer.
+     3. Decode Opcode and Set Control Signals. < Bring the set Control signal to the main function.
+     4. Choose the destination register by using the RegDst multiplexer.
+     */
+    
+    // TO DO: Don't write to the buffer directly. Instead use a temporary struct to pass data around and write to the buffer at the end of the stage.
+    id_ex.instruction = if_id.instruction;
+    decode_instructions(); // Reads the instruction and writes to the target buffer.
+    
     // Initializing by finding the opcode and funct
-	uint8_t opcode = (in->instruction)>>26;
-	uint8_t funct = ((in->instruction)<<26)>>26;
-    
-    // Figuring out addresses and data
-    out->is_syscall = false;
-    out->read_address1 = shift_and_find(in->instruction, 6, 27);
-    out->read_address2 = shift_and_find(in->instruction, 11, 27);
-    out->write_register = shift_and_find(in->instruction, 16, 27);
-    out->shamt = shift_and_find(in->instruction, 21, 27);
-    out->jump_address = shift_and_find(in->instruction, 6, 6);
-    out->sign_extended_immediate = shift_and_find(in->instruction, 16, 16);
-    out->read_data2 = cpu_ctx.GPR[out->read_address2];
-    out->read_data1 = cpu_ctx.GPR[out->read_address1];
-	out->next_pc = in->next_pc;
-    out->jump_ctrl = NONE;
-    
     // Decode the opcode to find the control signals
-    decode_opcode(opcode, funct, in, out);
+    uint8_t opcode = shift_and_find(if_id.instruction, 0, 26);
+    uint8_t funct = shift_and_find(if_id.instruction, 26, 26);
+    decode_opcode(opcode, funct);
     
-    // Finding the source for the destination register
-	if (!out->reg_dst) out->write_register = out->read_address2;
+    // Finding the source for the destination register.
+    // Replacing the read address 2 from buffer with the actual write register.
     
-	return 0;
+    // << Place hazard Unit before writing to the buffer. >>
+    register_destination_multiplexer();
+    hazard_detection();
+    
+    return 0;
 }
 
-int execute( struct ID_EX_buffer *in, struct EX_MEM_buffer *out )
+
+int execute()
 {
-    cpu_ctx.PC = in->next_pc;
-    
+    ex_mem.instruction = id_ex.instruction;
     // Handling the syscall
-	if (in->is_syscall) {
-		// Copy the content of the v0 register to determine the type of operation.
-		syscall(cpu_ctx.GPR[2], cpu_ctx.GPR[4]);
-		return 0;
-	}
+    ex_mem.is_syscall = id_ex.is_syscall;
     // The operation in ALU after selecting the ALUSRC
-    out->alu_result = alu_operation(in);
-	// printf("Check alu result: %u \n", out->alu_result);
-	out->alu_zero = (out->alu_result == 0) ? true: false;
+    ex_mem.alu_result = alu_operation();
+    // printf("Check alu result: %u \n", ex_mem.alu_result);
+    ex_mem.alu_zero = (ex_mem.alu_result == 0) ? true: false;
     
     // Calculate the result for the branch instruction
-    int32_t left_shifted_imm = in->sign_extended_immediate << 2;
-    out->branch_target = left_shifted_imm + in->next_pc;
+    int32_t left_shifted_imm = id_ex.sign_extended_immediate << 2;
+    ex_mem.branch_target = left_shifted_imm + id_ex.next_pc;
     
     // Carrying on other control signals
-    out->branch = in->branch;
-    out->branch_ne = in->branch_ne;
-    out->mem_read = in->mem_read;
-    out->mem_write = in->mem_write;
-    out->reg_write = in->reg_write;
-    out->mem_to_reg = in->mem_to_reg;
-    out->read_data2 = in->read_data2;
-    out->write_register = in->write_register;
-    out->jump_ctrl = in->jump_ctrl;
-    out->jump_address = in->jump_address << 2;
+    ex_mem.branch = id_ex.branch;
+    ex_mem.branch_ne = id_ex.branch_ne;
+    ex_mem.mem_read = id_ex.mem_read;
+    ex_mem.mem_write = id_ex.mem_write;
+    ex_mem.reg_write = id_ex.reg_write;
+    ex_mem.mem_to_reg = id_ex.mem_to_reg;
+    ex_mem.read_data2 = id_ex.read_data2;
+    ex_mem.write_register = id_ex.write_register;
+    ex_mem.jump_ctrl = id_ex.jump_ctrl;
+    ex_mem.jump_address = id_ex.jump_address << 2;
+    ex_mem.next_pc = id_ex.next_pc;
     
     // Indicating successful completion of the function
-	return 0;
+    return 0;
 }
 
-int memory( struct EX_MEM_buffer *in, struct MEM_WB_buffer *out )
+
+int memory()
 {
+    mem_wb.is_syscall = ex_mem.is_syscall;
+    mem_wb.instruction = ex_mem.instruction;
     // Checking the result of the branch statement
-    if (in->branch && in->alu_zero)
-        cpu_ctx.PC = in->branch_target;
-    else if (in->branch_ne && !in->alu_zero)
-        cpu_ctx.PC = in->branch_target;
+    if(branch_taken())
+        update_pc(ex_mem.branch_target);
     
     // Check if we have to read or write to the memory
     int32_t read_data_memory = 0;
-    if (in->mem_read)
-        read_data_memory = data_memory[(in->alu_result - 0x10000000) / 4];
-
-    if (in->mem_write)
-        data_memory[(in->alu_result - 0x10000000) / 4] = in->read_data2;
+    // << Need to confirm the write address .. >>
+    if (ex_mem.mem_read)
+        read_data_memory = data_memory[(ex_mem.alu_result - 0x10000000) / 4];
+    
+    // << Need to confirm the write memory address ..>>
+    if (ex_mem.mem_write)
+        data_memory[(ex_mem.alu_result - 0x10000000) / 4] = ex_mem.read_data2;
     
     // Check what value to send to the write register
-    out->write_register = in->write_register;
-    out->write_data = (in->mem_to_reg)? read_data_memory : in->alu_result;
+    mem_wb.write_register = ex_mem.write_register;
+    mem_wb.write_data = (ex_mem.mem_to_reg)? read_data_memory : ex_mem.alu_result;
     
     // Passing the control signals
-    out->reg_write = in->reg_write;
+    mem_wb.reg_write = ex_mem.reg_write;
     
-    // Check if the instruction is a jump instruction
-    check_jump(in, out);
+    // Check if the instruction is a jump instruction.
+    check_jump();
     
-	return 0;
+    return 0;
 }
 
-int writeback( struct MEM_WB_buffer *in )
+
+int writeback()
 {
+    if (mem_wb.is_syscall) {
+        // Copy the content of the v0 register to determine the type of operation.
+        syscall(cpu_ctx.GPR[2], 4);
+    } else if (mem_wb.reg_write)
     // Writing the data in the given register
-    if (in->reg_write)
-        cpu_ctx.GPR[in->write_register] = in->write_data;
-    
+        cpu_ctx.GPR[mem_wb.write_register] = mem_wb.write_data;
 	return 0;
 }
 
@@ -131,26 +150,28 @@ int32_t shift_and_find(uint32_t instruction, uint8_t left, uint8_t right){
     return (instruction << left) >> right;
 }
 
-void set_control_signals(char arr[], struct ID_EX_buffer *out){
-	out->branch = convert_to_bool(arr[0]);
-	out->mem_read = convert_to_bool(arr[1]);
-	out->mem_to_reg = convert_to_bool(arr[2]);
-	out->mem_write = convert_to_bool(arr[3]);
-	out->reg_write = convert_to_bool(arr[4]);
-	out->alu_src = convert_to_bool(arr[5]);
-    out->branch_ne = convert_to_bool(arr[6]);
-	out->reg_dst = convert_to_bool(arr[7]);
+void set_control_signals(char arr[]){
+    id_ex.branch = convert_to_bool(arr[0]);
+    id_ex.mem_read = convert_to_bool(arr[1]);
+    id_ex.mem_to_reg = convert_to_bool(arr[2]);
+    id_ex.mem_write = convert_to_bool(arr[3]);
+    id_ex.reg_write = convert_to_bool(arr[4]);
+    id_ex.alu_src = convert_to_bool(arr[5]);
+    id_ex.branch_ne = convert_to_bool(arr[6]);
+    id_ex.reg_dst = convert_to_bool(arr[7]);
 }
+
 
 bool convert_to_bool(char a) {
 	return a != '0';
 }
 
-int32_t alu_operation(struct ID_EX_buffer *in){
-    int32_t src1 = in->read_data1;
-	int32_t src2 = (in->alu_src)?in->sign_extended_immediate:in->read_data2;
-	uint32_t u_src2 = src2;
-	switch(in->alu_control){
+int32_t alu_operation(){
+    int32_t src1 = forward(id_ex.read_address1);
+    int32_t src2 = forward(id_ex.read_address2);
+    src2 = (id_ex.alu_src) ? id_ex.sign_extended_immediate : src2;
+    uint32_t u_src2 = src2;
+    switch(id_ex.alu_control){
         case ADD:
             return (src1 + src2);
         case SUB:
@@ -165,144 +186,270 @@ int32_t alu_operation(struct ID_EX_buffer *in){
             return src1 ^ src2;
         case LUI:
             return src2 << 16;
-		case SLL:
-			return src2 << (in->shamt);
-		case SLT:
-			return (src1 < src2) ? 1 : 0;
-		case SRL:
-			return u_src2 >> (in->shamt);
-		case SRA:
-			return  src2 >> (in->shamt);
+        case SLL:
+            return src2 << (id_ex.shamt);
+        case SLT:
+            return (src1 < src2) ? 1 : 0;
+        case SRL:
+            return u_src2 >> (id_ex.shamt);
+        case SRA:
+            return  src2 >> (id_ex.shamt);
         default:
             return 0;
     }
 }
 
-void check_jump(struct EX_MEM_buffer *in, struct MEM_WB_buffer *out){
-    switch(in->jump_ctrl){
+
+void check_jump(){
+    switch(ex_mem.jump_ctrl){
         case NONE:
             return;
             
         case JUMP:
-            cpu_ctx.PC = in->jump_address;
+            update_pc(ex_mem.jump_address);
             return;
             
         case JAL:
-            out->write_data = cpu_ctx.PC;
-            cpu_ctx.PC = in->jump_address;
-            out->write_register = 31;
-            out->reg_write = true;
+            mem_wb.write_data = ex_mem.next_pc;
+            update_pc(ex_mem.jump_address);
+            mem_wb.write_register = 31;
+            mem_wb.reg_write = true;
             return;
             
         case JR:
-            cpu_ctx.PC = in->alu_result;
+            update_pc(ex_mem.alu_result);
             return;
     }
 }
 
-int decode_rformat(uint8_t funct, char *control_signal, struct ID_EX_buffer *out){
+
+int decode_rformat(uint8_t funct, char *control_signal){
     switch (funct)
     {
         case 8: //jr
-            out->jump_ctrl = JR;
+            id_ex.jump_ctrl = JR;
             strcpy(control_signal, "00000000");
-            out->alu_control = ADD;
+            id_ex.alu_control = ADD;
         case 32:
-            out->alu_control = ADD;
+            id_ex.alu_control = ADD;
             break;
         case 33:
-            out->alu_control = ADD;
+            id_ex.alu_control = ADD;
             break;
         case 36:
-            out->alu_control = AND;
+            id_ex.alu_control = AND;
             break;
         case 37:
-            out->alu_control = OR;
+            id_ex.alu_control = OR;
             break;
         case 0:
-            out->alu_control = SLL;
+            id_ex.alu_control = SLL;
             break;
         case 42:
-            out->alu_control = SLT;
+            id_ex.alu_control = SLT;
             break;
         case 2:
-            out->alu_control = SRL;
+            id_ex.alu_control = SRL;
             break;
         case 39:
-            out->alu_control = NOR;
+            id_ex.alu_control = NOR;
             break;
         case 3:
-            out->alu_control = SRA;
+            id_ex.alu_control = SRA;
             break;
         case 38:
-            out->alu_control = XOR;
+            id_ex.alu_control = XOR;
             break;
         case 40:
-            out->alu_control = SUB;
+            id_ex.alu_control = SUB;
             break;
     }
     return 0;
 }
 
-int decode_opcode(uint8_t opcode, uint8_t funct, struct IF_ID_buffer *in, struct ID_EX_buffer *out){
+
+int decode_opcode(uint8_t opcode, uint8_t funct){
     char control_signal[9];
     switch(opcode){
         case 0:
             strcpy(control_signal, "00001001");
             if(funct == 12){ // Syscall
-                out->is_syscall = true;
+                id_ex.is_syscall = true;
                 break;
             }
-            decode_rformat(funct, control_signal, out);
+            decode_rformat(funct, control_signal);
             break;
         case 2: // Jump instruction
-            out->jump_ctrl = JUMP;
+            id_ex.jump_ctrl = JUMP;
             strcpy(control_signal, "00000000");
             break;
         case 3: // JAL instruction
-            out->jump_ctrl = JAL;
+            id_ex.jump_ctrl = JAL;
             strcpy(control_signal, "00000000");
         case 8: // Add immediate.
-            out->alu_control = ADD;
+            id_ex.alu_control = ADD;
             strcpy(control_signal, "00001100");
             break;
         case 12: // And immediate.
-            out->alu_control = AND;
+            id_ex.alu_control = AND;
             strcpy(control_signal, "00001100");
             break;
         case 4: // Branch if equal.
-            out->alu_control = SUB;
+            id_ex.alu_control = SUB;
             strcpy(control_signal, "10000000");
             break;
         case 5: // Branch if not equal.
-            out->alu_control = SUB;
+            id_ex.alu_control = SUB;
             strcpy(control_signal, "10000010");
             break;
         case 13: // Or immediate.
-            out->alu_control = OR;
+            id_ex.alu_control = OR;
             strcpy(control_signal, "00001100");
             break;
         case 10: // Set if less than immediate.
-            out->alu_control = SLT;
+            id_ex.alu_control = SLT;
             strcpy(control_signal, "00001100");
             break;
         case 14: // XOR immediate.
-            out->alu_control = XOR;
+            id_ex.alu_control = XOR;
             strcpy(control_signal, "00001100");
             break;
         case 35: // Load word.
-            out->alu_control = SUB;
+            id_ex.alu_control = SUB;
             strcpy(control_signal, "01101100");
             break;
         case 43: // Store Word.
-            out->alu_control = ADD;
+            id_ex.alu_control = ADD;
             strcpy(control_signal, "00010100");
             break;
         case 15: // Load upper immediate.
-            out->alu_control = LUI;
+            id_ex.alu_control = LUI;
             strcpy(control_signal, "00001100");
             break;
     }
-    set_control_signals(control_signal, out);
+    set_control_signals(control_signal);
     return 0;
+}
+
+int hazard_detection(){
+# if defined(ENABLE_FORWARDING)
+    if (ex_mem.mem_read &&
+        (id_ex.read_address1 == ex_mem.write_register ||
+        id_ex.read_address2 == ex_mem.write_register)){
+            stall();
+    }
+# endif
+    
+# if !defined(ENABLE_FORWARDING)
+    // If forwarding is not defined
+    if (ex_mem.reg_write && ex_mem.write_register != 0 &&
+       (id_ex.read_address1 == ex_mem.write_register ||
+        id_ex.read_address2 == ex_mem.write_register)){
+           stall();
+    } else if (mem_wb.reg_write && ex_mem.write_register != 0 &&
+       (id_ex.read_address1 == mem_wb.write_register ||
+        id_ex.read_address2 == mem_wb.write_register)){
+           stall();
+    }
+#endif
+    // Check for branch instruction
+    if (branch_taken()){
+        printf("Squashed");
+        // Squashing the instruction fetched
+        squash = true;
+        squashs += 2;
+        // Squashing the instruction in decode stage
+        id_ex.reg_write = 0;
+        id_ex.mem_write = 0;
+        
+        id_ex.is_syscall = false;
+    }
+    
+    // For jumps
+    if (ex_mem.jump_ctrl != NONE){
+        printf("Squashed");
+        squash = true;
+        squashs += 2;
+        
+        id_ex.reg_write = 0;
+        id_ex.mem_write = 0;
+        id_ex.is_syscall = false;
+        
+    }
+    return 0;
+    
+    
+}
+
+void update_pc(uint32_t new_pc){
+    if (pc_write){
+        cpu_ctx.PC = new_pc;
+    }
+}
+
+void add_instruction(uint32_t new_instruction){
+    if (if_id_write){
+        if_id.instruction = new_instruction;
+    }
+    if (squash){
+        if_id.instruction = 0;
+    }
+}
+
+void reset_write_signals(){
+    pc_write = true;
+    if_id_write = true;
+    squash = false;
+}
+
+void stall(){
+    printf("stalled");
+    stalls++;
+    pc_write = false;
+    if_id_write = false;
+    id_ex.reg_write = 0;
+    id_ex.mem_write = 0;
+    id_ex.is_syscall = false;
+}
+
+int32_t forward(uint32_t reg_addr){
+# if defined(ENABLE_FORWARDING)
+    if (ex_mem.reg_write == 1 && ex_mem.write_register == reg_addr)
+        return ex_mem.alu_result;
+    if (mem_wb.reg_write == 1 && mem_wb.write_register == reg_addr)
+        return mem_wb.write_data;
+# endif
+    return cpu_ctx.GPR[reg_addr];
+}
+
+void decode_instructions(){
+    // Figuring out addresses and data
+    id_ex.is_syscall = false;
+    id_ex.read_address1 = shift_and_find(if_id.instruction, 6, 27);
+    id_ex.read_address2 = shift_and_find(if_id.instruction, 11, 27);
+    id_ex.write_register = shift_and_find(if_id.instruction, 16, 27);
+    id_ex.shamt = shift_and_find(if_id.instruction, 21, 27);
+    id_ex.jump_address = shift_and_find(if_id.instruction, 6, 6);
+    id_ex.sign_extended_immediate = shift_and_find(if_id.instruction, 16, 16);
+    id_ex.read_data2 = cpu_ctx.GPR[id_ex.read_address2];
+    id_ex.read_data1 = cpu_ctx.GPR[id_ex.read_address1];
+    id_ex.next_pc = if_id.next_pc;
+    id_ex.jump_ctrl = NONE;
+}
+
+void register_destination_multiplexer(){
+    if (!id_ex.reg_dst) id_ex.write_register = shift_and_find(if_id.instruction, 11, 27);
+}
+
+int no_of_stalls(){
+    return stalls;
+}
+
+int no_of_squashes(){
+    return squashs;
+}
+
+bool branch_taken(){
+    return (ex_mem.branch && ex_mem.alu_result == 0) ||
+    (ex_mem.branch_ne && ex_mem.alu_result != 0);
 }

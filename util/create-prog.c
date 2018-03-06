@@ -63,8 +63,8 @@ int main( int argc, char *argv[] )
 	if ( argc < 4 ) usage(argv[0]);
 
 	/* Open the text segment file for reading */
-	text = fopen(argv[1], "r");
-	data = fopen(argv[2], "r");
+	data = fopen(argv[1], "r");
+	text = fopen(argv[2], "r");
 	output = fopen(argv[3], "w");
 
 	assert(text);
