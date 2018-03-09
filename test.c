@@ -15,6 +15,7 @@ void test_fetch(struct IF_ID_buffer *out){
 
 void test_decode( struct ID_EX_buffer *out ){
     printf("\n\nAfter Decode\n");
+    printf("Instruction(hex): %x\n", out->instruction);
     printf("Read Address 1: %d\n", out->read_address1 );
     printf("Read Address 2: %d\n", out->read_address2 );
     printf("Read Data 1: %d\n", out->read_data1 );
@@ -34,6 +35,7 @@ void test_decode( struct ID_EX_buffer *out ){
 
 void test_execute( struct EX_MEM_buffer *out ){
     printf("\n\nAfter Execute\n");
+    printf("Instruction(hex): %x\n", out->instruction);
     printf("Branch Targer:%x\n", out->branch_target);
     printf("Alu Result   :%d\n", out->alu_result);
     printf("Read Data2   :%d\n", out->read_data2);
@@ -48,6 +50,7 @@ void test_execute( struct EX_MEM_buffer *out ){
 
 void test_memory(struct MEM_WB_buffer *out){
     printf("\n\nAfter Memory\n");
+    printf("Instruction(hex): %x\n", out->instruction);
 	printf("Next PC: %u \n", cpu_ctx.PC);
     printf("Write Registe:%d\n", out->write_register);
     printf("Write Data   :%d\n", out->write_data);
@@ -64,10 +67,6 @@ void print_registers(){
 
 int main(){
     // Initializing buffers
-    struct IF_ID_buffer if_id;
-	struct ID_EX_buffer id_ex;
-	struct EX_MEM_buffer ex_mem;
-	struct MEM_WB_buffer mem_wb;
 	int i ;
 
 	/* Initialize registers and memory to 0 */
@@ -82,7 +81,8 @@ int main(){
 		data_memory[i] = 0;
 	}
     
-    cpu_ctx.GPR[8] = -4;
+    cpu_ctx.GPR[17] = 0x10000000;
+    data_memory[0] = 10;
     
     uint32_t instructions[] = {
         0x00000000,
@@ -90,61 +90,61 @@ int main(){
         0x00000000,
         0x00000000,
         0x00000000,
-        0x0c100009,
-        0x00000000,
-        0x3402000a,
-        0x0000000c,
-        0x34090001,
-        0x340a0004,
-        0x3c011001,
-        0xac290000,
-        0x3c011001,
-        0x002a0821,
-        0xac290000,
-        0x34080008,
-        0x210bfff8,
-        0x210cfffc,
-        0x3c011001,
-        0x002b0821,
-        0x8c290000,
-        0x3c011001,
-        0x002c0821,
-        0x8c2a0000,
-        0x012a6820,
-        0x3c011001,
-        0x00280821,
-        0xac2d0000,
-        0x21080004,
-        0x290100a0,
-        0x1420fff2,
-        0x21050000,
-        0x34020001,
-        0x0000000c,
-        0x03e00008
+        0x20090000,
+        0x200A0005,
+        0x112A0005,
+        0x21290001,
+        0x00092020,
+        0x20020001,
+        0x0000000C,
+        0x08100007,
+        0x2002000A,
+        0x0000000C,
+        0,0,0,0,0
     };
 
-    for (int i = 0; i < 36; i++){
+    for (int i = 0; i < 20; i++){
         instruction_memory[i] = instructions[i];
     }
     
-	for (int i = 0; i < 36; i++) {
-        printf("__________________________________________\n");
-		fetch(&if_id);
-        printf("Instruction %d -> %x\n", i+1, if_id.instruction);
-		test_fetch(&if_id);
-		decode(&if_id, &id_ex);
-		test_decode(&id_ex);
-		execute(&id_ex, &ex_mem);
-		test_execute(&ex_mem);
-		memory(&ex_mem, &mem_wb);
-		test_memory(&mem_wb);
-        writeback(&mem_wb);
+    for (int i = 0; i < 5; i++){
+        fetch();
+        decode();
+        execute();
+        memory();
+        writeback();
+    }
+    
+    i = 0;
+    while(1){
+        printf("%d__________________________________________\n", ++i);
+		//fetch();
+        //printf("Instruction %d -> %x\n", ++i, if_id.instruction);
+		//test_fetch(&if_id);
+		//decode();
+		//test_decode(&id_ex);
+		//execute();
+		//test_execute(&ex_mem);
+		//memory();
+		//test_memory(&mem_wb);
+        //writeback();
         //Testing the PC
+        //printf("\nGPR[%d]: %d\n", mem_wb.write_register, cpu_ctx.GPR[mem_wb.write_register]);
+        //printf("\nPC:%x\n\n", cpu_ctx.PC);
+        writeback();
         printf("\nGPR[%d]: %d\n", mem_wb.write_register, cpu_ctx.GPR[mem_wb.write_register]);
-        printf("\nPC:%x\n\n", cpu_ctx.PC);
+        memory();
+        test_memory(&mem_wb);
+        execute();
+        test_execute(&ex_mem);
+        decode();
+        test_decode(&id_ex);
+        fetch();
+        test_fetch(&if_id);
+        reset_write_signals();
 	}
     
-    //print_registers();
+    printf("%d", cpu_ctx.GPR[8]);
 
     return 0;
 }

@@ -48,7 +48,3 @@ void syscall(uint32_t num, int32_t out) {
     printf("---------------------------- \n");
 }
 
-void complete_execution(){
-    
-}
-

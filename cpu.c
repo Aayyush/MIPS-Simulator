@@ -17,6 +17,10 @@
 #include <stdbool.h>
 
 #define ENABLE_FORWARDING
+#define DECODE_STAGE_JUMP
+#define DECODE_STAGE_BRANCH
+#define ENABLE_PIPELINE
+
 
 bool pc_write = true;
 bool if_id_write = true;
@@ -50,22 +54,33 @@ int decode()
      4. Choose the destination register by using the RegDst multiplexer.
      */
     
-    // TO DO: Don't write to the buffer directly. Instead use a temporary struct to pass data around and write to the buffer at the end of the stage.
     id_ex.instruction = if_id.instruction;
     decode_instructions(); // Reads the instruction and writes to the target buffer.
     
-    // Initializing by finding the opcode and funct
     // Decode the opcode to find the control signals
     uint8_t opcode = shift_and_find(if_id.instruction, 0, 26);
     uint8_t funct = shift_and_find(if_id.instruction, 26, 26);
     decode_opcode(opcode, funct);
     
-    // Finding the source for the destination register.
-    // Replacing the read address 2 from buffer with the actual write register.
+    register_destination_multiplexer(); // Chosing the write register.
     
+
+#if defined(ENABLE_DECODE_STAGE_BRANCHES)
+    // Hazard Detection Unit Reguired.
+    decode_stage_branch();
+#endif
+    
+#if defined(ENABLE_DECODE_STAGE_JUMPS)
+    // Hazard Detection Unit Required.
+    decode_stage_jump();
+#endif
+    
+#if defined(ENABLE_PIPELINE)
+    hazard_detection();
+#endif
+
     // << Place hazard Unit before writing to the buffer. >>
     register_destination_multiplexer();
-    hazard_detection();
     
     return 0;
 }
@@ -108,9 +123,13 @@ int memory()
     mem_wb.is_syscall = ex_mem.is_syscall;
     mem_wb.instruction = ex_mem.instruction;
     // Checking the result of the branch statement
+
+#if !defined(ENABLE_DECODE_STAGE_BRANCH)
     if(branch_taken())
+        // Update only if decode stage branch is disabled. PC Updated with Decode stage branch.
         update_pc(ex_mem.branch_target);
-    
+#endif
+
     // Check if we have to read or write to the memory
     int32_t read_data_memory = 0;
     // << Need to confirm the write address .. >>
@@ -338,10 +357,9 @@ int hazard_detection(){
         id_ex.read_address2 == ex_mem.write_register)){
             stall();
     }
-# endif
-    
-# if !defined(ENABLE_FORWARDING)
+# else
     // If forwarding is not defined
+    // <-- What about load use stalls -->
     if (ex_mem.reg_write && ex_mem.write_register != 0 &&
        (id_ex.read_address1 == ex_mem.write_register ||
         id_ex.read_address2 == ex_mem.write_register)){
@@ -353,28 +371,35 @@ int hazard_detection(){
     }
 #endif
     // Check for branch instruction
+
+
     if (branch_taken()){
-        printf("Squashed");
         // Squashing the instruction fetched
         squash = true;
+#if defined(DECODE_STAGE_BRANCH)
+        squashs++;
+#else
         squashs += 2;
         // Squashing the instruction in decode stage
         id_ex.reg_write = 0;
         id_ex.mem_write = 0;
-        
         id_ex.is_syscall = false;
+#endif
     }
+
     
     // For jumps
     if (ex_mem.jump_ctrl != NONE){
-        printf("Squashed");
         squash = true;
+#if defined(DECODE_STAGE_JUMP)
+        squashs++;
+#else
         squashs += 2;
-        
         id_ex.reg_write = 0;
         id_ex.mem_write = 0;
         id_ex.is_syscall = false;
-        
+
+#endif
     }
     return 0;
     
@@ -452,4 +477,51 @@ int no_of_squashes(){
 bool branch_taken(){
     return (ex_mem.branch && ex_mem.alu_result == 0) ||
     (ex_mem.branch_ne && ex_mem.alu_result != 0);
+}
+
+void decode_stage_branch(){
+    /*
+     1. Look if need to forward data from the next stages.
+     2. Calculate branch target.
+     3. If taken, update PC.
+     4. Set branch and branch_ne to 0.
+     */
+    uint32_t src_forwarded_1 = forward(id_ex.read_address1);
+    uint32_t src_forwarded_2 = forward(id_ex.read_address2);
+    if (id_ex.branch || id_ex.branch_ne){
+        printf("Read address 1: %d Read Data 1: %d Read Address 2: %d Read Data 2: %d \n", id_ex.read_address1, id_ex.read_data1, id_ex.read_address2, id_ex.read_data2);
+    }
+    int32_t left_shifted_imm = id_ex.sign_extended_immediate << 2;
+    uint32_t next_pc = left_shifted_imm + id_ex.next_pc;
+    if ((src_forwarded_1 == src_forwarded_2 && id_ex.branch) || (src_forwarded_1 != src_forwarded_2 && id_ex.branch_ne)){
+        update_pc(next_pc);
+        id_ex.branch_taken = true;
+    }else{
+        id_ex.branch_taken = false;
+    }
+}
+
+void decode_stage_jump(){
+    switch(id_ex.jump_ctrl){
+        case NONE:
+            return;
+            
+        case JUMP:
+            // Jump address the 1st 4 bits is always 0 for this program.
+            update_pc(id_ex.jump_address << 2);
+            break;
+            
+        case JAL:
+            // Writing to the register file done in the Memory stage.
+            update_pc(id_ex.jump_address << 2);
+            id_ex.write_register = 31;
+            id_ex.reg_write = true;
+            break;
+            
+        case JR:
+            update_pc(id_ex.read_data1);
+            break;
+    }
+    // Set the jump control to 0.
+    return ;
 }
